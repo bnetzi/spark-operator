@@ -185,7 +185,7 @@ func main() {
 	}
 
 	applicationController := sparkapplication.NewController(
-		crClient, kubeClient, crInformerFactory, podInformerFactory, metricConfig, *namespace, *ingressURLFormat, *ingressClassName, batchSchedulerMgr, *enableUIService)
+		crClient, kubeClient, crInformerFactory, podInformerFactory, metricConfig, *namespace, *ingressURLFormat, *ingressClassName, batchSchedulerMgr, *enableUIService, *controllerThreads)
 	scheduledApplicationController := scheduledsparkapplication.NewController(
 		crClient, kubeClient, apiExtensionsClient, crInformerFactory, clock.RealClock{})
 

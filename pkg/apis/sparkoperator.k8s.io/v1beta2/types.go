@@ -451,6 +451,9 @@ type SparkPodSpec struct {
 	// MemoryOverhead is the amount of off-heap memory to allocate in cluster mode, in MiB unless otherwise specified.
 	// +optional
 	MemoryOverhead *string `json:"memoryOverhead,omitempty"`
+	// MemoryLimit is the pod limit, used in cases we want to enable the memory limit for the pod.
+	// +optional
+	MemoryLimit *string `json:"memoryLimit,omitempty"`
 	// GPU specifies GPU requirement for the pod.
 	// +optional
 	GPU *GPUSpec `json:"gpu,omitempty"`

@@ -18,7 +18,9 @@ package sparkapplication
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"math/big"
 	"os/exec"
 	"time"
 
@@ -69,7 +71,7 @@ var (
 type Controller struct {
 	crdClient         crdclientset.Interface
 	kubeClient        clientset.Interface
-	queue             workqueue.RateLimitingInterface
+	queues            []workqueue.RateLimitingInterface
 	cacheSynced       cache.InformerSynced
 	recorder          record.EventRecorder
 	metrics           *sparkAppMetrics
@@ -79,6 +81,34 @@ type Controller struct {
 	ingressClassName  string
 	batchSchedulerMgr *batchscheduler.SchedulerManager
 	enableUIService   bool
+}
+
+func (c *Controller) ReturnRelevantQueue(appName string) workqueue.RateLimitingInterface {
+	// Hash the string using SHA256
+	hash := sha256.Sum256([]byte(appName))
+
+	// Convert the hash to a big integer
+	hashInt := new(big.Int).SetBytes(hash[:])
+
+	// Calculate the modulo to get a value between 1 and queues len
+	modValue := new(big.Int).SetInt64(int64(len(c.queues)))
+	result64 := new(big.Int).Mod(hashInt, modValue)
+
+	result := int(result64.Int64())
+
+	// Print the resulting integer
+	glog.V(2).Infof("Queue num for app %s: %d", appName, result)
+	return c.queues[result]
+}
+
+func (c *Controller) AddToRelevantQueue(appName interface{}) {
+	// Use the interface as string
+	if appString, ok := appName.(string); ok {
+		c.ReturnRelevantQueue(appString).AddRateLimited(appName)
+	} else {
+		glog.Errorf("failed to convert %v to string, not enqueuing it", appName)
+	}
+
 }
 
 // NewController creates a new Controller.
@@ -92,7 +122,9 @@ func NewController(
 	ingressURLFormat string,
 	ingressClassName string,
 	batchSchedulerMgr *batchscheduler.SchedulerManager,
-	enableUIService bool) *Controller {
+	enableUIService bool,
+	queueAmount int,
+) *Controller {
 	crdscheme.AddToScheme(scheme.Scheme)
 
 	eventBroadcaster := record.NewBroadcaster()
@@ -102,7 +134,7 @@ func NewController(
 	})
 	recorder := eventBroadcaster.NewRecorder(scheme.Scheme, apiv1.EventSource{Component: "spark-operator"})
 
-	return newSparkApplicationController(crdClient, kubeClient, crdInformerFactory, podInformerFactory, recorder, metricsConfig, ingressURLFormat, ingressClassName, batchSchedulerMgr, enableUIService)
+	return newSparkApplicationController(crdClient, kubeClient, crdInformerFactory, podInformerFactory, recorder, metricsConfig, ingressURLFormat, ingressClassName, batchSchedulerMgr, enableUIService, queueAmount)
 }
 
 func newSparkApplicationController(
@@ -115,15 +147,28 @@ func newSparkApplicationController(
 	ingressURLFormat string,
 	ingressClassName string,
 	batchSchedulerMgr *batchscheduler.SchedulerManager,
-	enableUIService bool) *Controller {
-	queue := workqueue.NewNamedRateLimitingQueue(&workqueue.BucketRateLimiter{Limiter: rate.NewLimiter(rate.Limit(queueTokenRefillRate), queueTokenBucketSize)},
-		"spark-application-controller")
+	enableUIService bool,
+	queueAmount int,
+
+) *Controller {
+
+	var queues []workqueue.RateLimitingInterface
+	for i := 0; i < queueAmount; i++ {
+		// runWorker will loop until "something bad" happens. Until will then rekick
+		// the worker after one second.
+		controllerName := fmt.Sprintf("spark-application-controller-%d", i)
+
+		queue := workqueue.NewNamedRateLimitingQueue(&workqueue.BucketRateLimiter{Limiter: rate.NewLimiter(rate.Limit(queueTokenRefillRate), queueTokenBucketSize)},
+			controllerName)
+		queues = append(queues, queue)
+
+	}
 
 	controller := &Controller{
 		crdClient:         crdClient,
 		kubeClient:        kubeClient,
 		recorder:          eventRecorder,
-		queue:             queue,
+		queues:            queues,
 		ingressURLFormat:  ingressURLFormat,
 		ingressClassName:  ingressClassName,
 		batchSchedulerMgr: batchSchedulerMgr,
@@ -144,7 +189,8 @@ func newSparkApplicationController(
 	controller.applicationLister = crdInformer.Lister()
 
 	podsInformer := podInformerFactory.Core().V1().Pods()
-	sparkPodEventHandler := newSparkPodEventHandler(controller.queue.AddRateLimited, controller.applicationLister)
+	//
+	sparkPodEventHandler := newSparkPodEventHandler(controller.AddToRelevantQueue, controller.applicationLister)
 	podsInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    sparkPodEventHandler.onPodAdded,
 		UpdateFunc: sparkPodEventHandler.onPodUpdated,
@@ -166,11 +212,19 @@ func (c *Controller) Start(workers int, stopCh <-chan struct{}) error {
 		return fmt.Errorf("timed out waiting for cache to sync")
 	}
 
-	glog.Info("Starting the workers of the SparkApplication controller")
+	glog.Infof("Starting %d workers of the SparkApplication controller", workers)
+	//for i := 0; i < workers-1; i++ {
+	//	// runWorker will loop until "something bad" happens. Until will then rekick
+	//	// the worker after one second.
+	//
+	//	go wait.Until( }(i), time.Second, stopCh)
+	//	go wait.Group.StartWithChannel()
+	//}
+
 	for i := 0; i < workers; i++ {
-		// runWorker will loop until "something bad" happens. Until will then rekick
-		// the worker after one second.
-		go wait.Until(c.runWorker, time.Second, stopCh)
+		go func(workerID int) {
+			wait.Until(func() { c.runWorker(workerID) }, time.Second, stopCh)
+		}(i)
 	}
 
 	return nil
@@ -179,7 +233,9 @@ func (c *Controller) Start(workers int, stopCh <-chan struct{}) error {
 // Stop stops the controller.
 func (c *Controller) Stop() {
 	glog.Info("Stopping the SparkApplication controller")
-	c.queue.ShutDown()
+	for i := range c.queues {
+		c.queues[i].ShutDown()
+	}
 }
 
 // Callback function called when a new SparkApplication object gets created.
@@ -250,19 +306,24 @@ func (c *Controller) onDelete(obj interface{}) {
 }
 
 // runWorker runs a single controller worker.
-func (c *Controller) runWorker() {
+func (c *Controller) runWorker(i int) {
 	defer utilruntime.HandleCrash()
-	for c.processNextItem() {
+	glog.Infof("Running worker %d of the SparkApplication controller", i)
+	for c.processNextItem(i) {
 	}
+
 }
 
-func (c *Controller) processNextItem() bool {
-	key, quit := c.queue.Get()
+func (c *Controller) processNextItem(i int) bool {
+	glog.Infof("Waiting for a message in queue %d of the SparkApplication controller", i)
+	glog.Infof("queues len is %d", len(c.queues))
+	queue := c.queues[i]
+	key, quit := queue.Get()
 
 	if quit {
 		return false
 	}
-	defer c.queue.Done(key)
+	defer queue.Done(key)
 
 	glog.V(2).Infof("Starting processing key: %q", key)
 	defer glog.V(2).Infof("Ending processing key: %q", key)
@@ -270,7 +331,7 @@ func (c *Controller) processNextItem() bool {
 	if err == nil {
 		// Successfully processed the key or the key was not found so tell the queue to stop tracking
 		// history for your key. This will reset things like failure counts for per-item rate limiting.
-		c.queue.Forget(key)
+		queue.Forget(key)
 		return true
 	}
 
@@ -483,41 +544,41 @@ func shouldRetry(app *v1beta2.SparkApplication) bool {
 }
 
 // State Machine for SparkApplication:
-//+--------------------------------------------------------------------------------------------------------------------+
-//|        +---------------------------------------------------------------------------------------------+             |
-//|        |       +----------+                                                                          |             |
-//|        |       |          |                                                                          |             |
-//|        |       |          |                                                                          |             |
-//|        |       |Submission|                                                                          |             |
-//|        |  +---->  Failed  +----+------------------------------------------------------------------+  |             |
-//|        |  |    |          |    |                                                                  |  |             |
-//|        |  |    |          |    |                                                                  |  |             |
-//|        |  |    +----^-----+    |  +-----------------------------------------+                     |  |             |
-//|        |  |         |          |  |                                         |                     |  |             |
-//|        |  |         |          |  |                                         |                     |  |             |
-//|      +-+--+----+    |    +-----v--+-+          +----------+           +-----v-----+          +----v--v--+          |
-//|      |         |    |    |          |          |          |           |           |          |          |          |
-//|      |         |    |    |          |          |          |           |           |          |          |          |
-//|      |   New   +---------> Submitted+----------> Running  +----------->  Failing  +---------->  Failed  |          |
-//|      |         |    |    |          |          |          |           |           |          |          |          |
-//|      |         |    |    |          |          |          |           |           |          |          |          |
-//|      |         |    |    |          |          |          |           |           |          |          |          |
-//|      +---------+    |    +----^-----+          +-----+----+           +-----+-----+          +----------+          |
-//|                     |         |                      |                      |                                      |
-//|                     |         |                      |                      |                                      |
-//|    +------------+   |         |             +-------------------------------+                                      |
-//|    |            |   |   +-----+-----+       |        |                +-----------+          +----------+          |
-//|    |            |   |   |  Pending  |       |        |                |           |          |          |          |
-//|    |            |   +---+   Rerun   <-------+        +---------------->Succeeding +---------->Completed |          |
-//|    |Invalidating|       |           <-------+                         |           |          |          |          |
-//|    |            +------->           |       |                         |           |          |          |          |
-//|    |            |       |           |       |                         |           |          |          |          |
-//|    |            |       +-----------+       |                         +-----+-----+          +----------+          |
-//|    +------------+                           |                               |                                      |
-//|                                             |                               |                                      |
-//|                                             +-------------------------------+                                      |
-//|                                                                                                                    |
-//+--------------------------------------------------------------------------------------------------------------------+
+// +--------------------------------------------------------------------------------------------------------------------+
+// |        +---------------------------------------------------------------------------------------------+             |
+// |        |       +----------+                                                                          |             |
+// |        |       |          |                                                                          |             |
+// |        |       |          |                                                                          |             |
+// |        |       |Submission|                                                                          |             |
+// |        |  +---->  Failed  +----+------------------------------------------------------------------+  |             |
+// |        |  |    |          |    |                                                                  |  |             |
+// |        |  |    |          |    |                                                                  |  |             |
+// |        |  |    +----^-----+    |  +-----------------------------------------+                     |  |             |
+// |        |  |         |          |  |                                         |                     |  |             |
+// |        |  |         |          |  |                                         |                     |  |             |
+// |      +-+--+----+    |    +-----v--+-+          +----------+           +-----v-----+          +----v--v--+          |
+// |      |         |    |    |          |          |          |           |           |          |          |          |
+// |      |         |    |    |          |          |          |           |           |          |          |          |
+// |      |   New   +---------> Submitted+----------> Running  +----------->  Failing  +---------->  Failed  |          |
+// |      |         |    |    |          |          |          |           |           |          |          |          |
+// |      |         |    |    |          |          |          |           |           |          |          |          |
+// |      |         |    |    |          |          |          |           |           |          |          |          |
+// |      +---------+    |    +----^-----+          +-----+----+           +-----+-----+          +----------+          |
+// |                     |         |                      |                      |                                      |
+// |                     |         |                      |                      |                                      |
+// |    +------------+   |         |             +-------------------------------+                                      |
+// |    |            |   |   +-----+-----+       |        |                +-----------+          +----------+          |
+// |    |            |   |   |  Pending  |       |        |                |           |          |          |          |
+// |    |            |   +---+   Rerun   <-------+        +---------------->Succeeding +---------->Completed |          |
+// |    |Invalidating|       |           <-------+                         |           |          |          |          |
+// |    |            +------->           |       |                         |           |          |          |          |
+// |    |            |       |           |       |                         |           |          |          |          |
+// |    |            |       +-----------+       |                         +-----+-----+          +----------+          |
+// |    +------------+                           |                               |                                      |
+// |                                             |                               |                                      |
+// |                                             +-------------------------------+                                      |
+// |                                                                                                                    |
+// +--------------------------------------------------------------------------------------------------------------------+
 func (c *Controller) syncSparkApplication(key string) error {
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
@@ -955,8 +1016,7 @@ func (c *Controller) enqueue(obj interface{}) {
 		glog.Errorf("failed to get key for %v: %v", obj, err)
 		return
 	}
-
-	c.queue.AddRateLimited(key)
+	c.ReturnRelevantQueue(key).AddRateLimited(key)
 }
 
 func (c *Controller) recordSparkApplicationEvent(app *v1beta2.SparkApplication) {
