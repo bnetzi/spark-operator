@@ -18,10 +18,9 @@ package sparkapplication
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
-	"math/big"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/golang/glog"
@@ -67,11 +66,17 @@ var (
 	execCommand = exec.Command
 )
 
+// AppQueueInfo is a struct to hold the queue and the last update timestamp for a SparkApplication
+type AppQueueInfo struct {
+	Queue        workqueue.RateLimitingInterface
+	LastUpdateTs time.Time
+}
+
 // Controller manages instances of SparkApplication.
 type Controller struct {
 	crdClient         crdclientset.Interface
 	kubeClient        clientset.Interface
-	queues            []workqueue.RateLimitingInterface
+	appQueues         map[string]AppQueueInfo
 	cacheSynced       cache.InformerSynced
 	recorder          record.EventRecorder
 	metrics           *sparkAppMetrics
@@ -83,28 +88,33 @@ type Controller struct {
 	enableUIService   bool
 }
 
-func (c *Controller) ReturnRelevantQueue(appName string) workqueue.RateLimitingInterface {
-	// Hash the string using SHA256
-	hash := sha256.Sum256([]byte(appName))
+func (c *Controller) GetOrCreateRelevantQueue(appName string) AppQueueInfo {
+	queueInfo, exists := c.appQueues[appName]
+	if !exists {
+		// Create a new queue for the app
+		controllerName := fmt.Sprintf("spark-application-controller-%v", appName)
+		queue := workqueue.NewNamedRateLimitingQueue(&workqueue.BucketRateLimiter{Limiter: rate.NewLimiter(rate.Limit(queueTokenRefillRate), queueTokenBucketSize)},
+			controllerName)
 
-	// Convert the hash to a big integer
-	hashInt := new(big.Int).SetBytes(hash[:])
+		queueInfo := AppQueueInfo{
+			Queue:        queue,
+			LastUpdateTs: time.Now(),
+		}
 
-	// Calculate the modulo to get a value between 1 and queues len
-	modValue := new(big.Int).SetInt64(int64(len(c.queues)))
-	result64 := new(big.Int).Mod(hashInt, modValue)
+		c.appQueues[appName] = queueInfo
 
-	result := int(result64.Int64())
-
-	// Print the resulting integer
-	glog.V(2).Infof("Queue num for app %s: %d", appName, result)
-	return c.queues[result]
+		// create a worker for the app queue
+		go func(appName string) { c.runWorker(appName) }(appName)
+		glog.V(0).Infof("Created queue for app %v", appName)
+		return queueInfo
+	}
+	return queueInfo
 }
 
 func (c *Controller) AddToRelevantQueue(appName interface{}) {
 	// Use the interface as string
 	if appString, ok := appName.(string); ok {
-		c.ReturnRelevantQueue(appString).AddRateLimited(appName)
+		c.GetOrCreateRelevantQueue(appString).Queue.AddRateLimited(appName)
 	} else {
 		glog.Errorf("failed to convert %v to string, not enqueuing it", appName)
 	}
@@ -123,7 +133,6 @@ func NewController(
 	ingressClassName string,
 	batchSchedulerMgr *batchscheduler.SchedulerManager,
 	enableUIService bool,
-	queueAmount int,
 ) *Controller {
 	crdscheme.AddToScheme(scheme.Scheme)
 
@@ -134,7 +143,7 @@ func NewController(
 	})
 	recorder := eventBroadcaster.NewRecorder(scheme.Scheme, apiv1.EventSource{Component: "spark-operator"})
 
-	return newSparkApplicationController(crdClient, kubeClient, crdInformerFactory, podInformerFactory, recorder, metricsConfig, ingressURLFormat, ingressClassName, batchSchedulerMgr, enableUIService, queueAmount)
+	return newSparkApplicationController(crdClient, kubeClient, crdInformerFactory, podInformerFactory, recorder, metricsConfig, ingressURLFormat, ingressClassName, batchSchedulerMgr, enableUIService)
 }
 
 func newSparkApplicationController(
@@ -148,27 +157,14 @@ func newSparkApplicationController(
 	ingressClassName string,
 	batchSchedulerMgr *batchscheduler.SchedulerManager,
 	enableUIService bool,
-	queueAmount int,
 
 ) *Controller {
-
-	var queues []workqueue.RateLimitingInterface
-	for i := 0; i < queueAmount; i++ {
-		// runWorker will loop until "something bad" happens. Until will then rekick
-		// the worker after one second.
-		controllerName := fmt.Sprintf("spark-application-controller-%d", i)
-
-		queue := workqueue.NewNamedRateLimitingQueue(&workqueue.BucketRateLimiter{Limiter: rate.NewLimiter(rate.Limit(queueTokenRefillRate), queueTokenBucketSize)},
-			controllerName)
-		queues = append(queues, queue)
-
-	}
 
 	controller := &Controller{
 		crdClient:         crdClient,
 		kubeClient:        kubeClient,
+		appQueues:         make(map[string]AppQueueInfo),
 		recorder:          eventRecorder,
-		queues:            queues,
 		ingressURLFormat:  ingressURLFormat,
 		ingressClassName:  ingressClassName,
 		batchSchedulerMgr: batchSchedulerMgr,
@@ -205,36 +201,55 @@ func newSparkApplicationController(
 	return controller
 }
 
+// StartQueueCleanupRoutine starts a go routine to clean up queues for SparkApplications that have not been updated for a certain period.
+func (c *Controller) StartQueueCleanupRoutine(checkInterval time.Duration, maxAge time.Duration, stopCh <-chan struct{}) {
+	ticker := time.NewTicker(checkInterval)
+	defer ticker.Stop()
+
+	// Infinite loop that listens for ticker.C channel and stopCh channel.
+	for {
+		select {
+		case <-ticker.C: // every checkInterval duration
+			c.cleanupQueues(maxAge)
+		case <-stopCh:
+			return
+		}
+	}
+}
+
+// cleanupQueues deletes the queues for SparkApplications that have not been updated for a certain period.
+func (c *Controller) cleanupQueues(maxAge time.Duration) {
+	now := time.Now()
+	for appName, queueInfo := range c.appQueues {
+		if now.Sub(queueInfo.LastUpdateTs) > maxAge {
+			c.deleteImmediateQueue(appName)
+		}
+	}
+}
+
+// StopQueueCleanupRoutine stops the go routine that cleans up queues.
+func (c *Controller) StopQueueCleanupRoutine(stopCh chan struct{}) {
+	close(stopCh)
+}
+
 // Start starts the Controller by registering a watcher for SparkApplication objects.
-func (c *Controller) Start(workers int, stopCh <-chan struct{}) error {
+func (c *Controller) Start(maxAge time.Duration, checkInterval time.Duration, stopCh <-chan struct{}) error {
 	// Wait for all involved caches to be synced, before processing items from the queue is started.
 	if !cache.WaitForCacheSync(stopCh, c.cacheSynced) {
 		return fmt.Errorf("timed out waiting for cache to sync")
 	}
 
-	glog.Infof("Starting %d workers of the SparkApplication controller", workers)
-	//for i := 0; i < workers-1; i++ {
-	//	// runWorker will loop until "something bad" happens. Until will then rekick
-	//	// the worker after one second.
-	//
-	//	go wait.Until( }(i), time.Second, stopCh)
-	//	go wait.Group.StartWithChannel()
-	//}
-
-	for i := 0; i < workers; i++ {
-		go func(workerID int) {
-			wait.Until(func() { c.runWorker(workerID) }, time.Second, stopCh)
-		}(i)
-	}
-
+	glog.V(0).Infof("Starting the queue cleaner interval go routine with interval %v and max age %v", checkInterval, maxAge)
+	c.StartQueueCleanupRoutine(checkInterval, maxAge, stopCh)
 	return nil
 }
 
 // Stop stops the controller.
-func (c *Controller) Stop() {
+func (c *Controller) Stop(stopCh chan struct{}) {
 	glog.Info("Stopping the SparkApplication controller")
-	for i := range c.queues {
-		c.queues[i].ShutDown()
+	c.StopQueueCleanupRoutine(stopCh)
+	for _, queueInfo := range c.appQueues {
+		queueInfo.Queue.ShutDown()
 	}
 }
 
@@ -302,32 +317,63 @@ func (c *Controller) onDelete(obj interface{}) {
 			"SparkApplicationDeleted",
 			"SparkApplication %s was deleted",
 			app.Name)
+
+		if appName, ok := obj.(string); ok {
+			c.GetOrCreateRelevantQueue(appName).Queue.AddRateLimited("ToDelete")
+		}
 	}
+}
+
+// LogQueuesKeys LogMapKeys logs the keys of the myMap field at debug level 2
+func (c *Controller) LogQueuesKeys() {
+	var keys []string
+	for key := range c.appQueues {
+		keys = append(keys, key)
+	}
+
+	keysStr := strings.Join(keys, ", ")
+	glog.V(2).Info("The queues are: ", keysStr)
+}
+
+// deleteImmediateQueue deletes the queue for the given app immediately
+func (c *Controller) deleteImmediateQueue(appName string) {
+	c.GetOrCreateRelevantQueue(appName).Queue.ShutDown()
+	delete(c.appQueues, appName)
+	glog.V(0).Infof("Succesfully deleted queue for app %v", appName)
 }
 
 // runWorker runs a single controller worker.
-func (c *Controller) runWorker(i int) {
+func (c *Controller) runWorker(appName string) {
 	defer utilruntime.HandleCrash()
-	glog.Infof("Running worker %d of the SparkApplication controller", i)
-	for c.processNextItem(i) {
+	glog.V(1).Infof("Running worker %v of the SparkApplication controller", appName)
+	for c.processNextItem(appName) {
 	}
-
 }
 
-func (c *Controller) processNextItem(i int) bool {
-	glog.Infof("Waiting for a message in queue %d of the SparkApplication controller", i)
-	glog.Infof("queues len is %d", len(c.queues))
-	queue := c.queues[i]
+// processNextItem processes the next item in the queue.
+func (c *Controller) processNextItem(appName string) bool {
+	glog.V(2).Infof("Waiting for a message in queue of app %v of the SparkApplication controller", appName)
+	glog.V(2).Infof("Amount of queues is %d", len(c.appQueues))
+	c.LogQueuesKeys()
+	queue := c.GetOrCreateRelevantQueue(appName).Queue
 	key, quit := queue.Get()
 
 	if quit {
 		return false
 	}
+
+	if keyStr, ok := key.(string); ok && keyStr == "ToDelete" {
+		c.deleteImmediateQueue(appName)
+	}
 	defer queue.Done(key)
 
 	glog.V(2).Infof("Starting processing key: %q", key)
 	defer glog.V(2).Infof("Ending processing key: %q", key)
-	err := c.syncSparkApplication(key.(string))
+	err, deleteQueue := c.syncSparkApplication(key.(string))
+	if deleteQueue {
+		c.deleteImmediateQueue(appName)
+		return false
+	}
 	if err == nil {
 		// Successfully processed the key or the key was not found so tell the queue to stop tracking
 		// history for your key. This will reset things like failure counts for per-item rate limiting.
@@ -579,22 +625,23 @@ func shouldRetry(app *v1beta2.SparkApplication) bool {
 // |                                             +-------------------------------+                                      |
 // |                                                                                                                    |
 // +--------------------------------------------------------------------------------------------------------------------+
-func (c *Controller) syncSparkApplication(key string) error {
+func (c *Controller) syncSparkApplication(key string) (error, bool) {
+	// The second return value indicates if the queue should be deleted.
 	namespace, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
-		return fmt.Errorf("failed to get the namespace and name from key %s: %v", key, err)
+		return fmt.Errorf("failed to get the namespace and name from key %s: %v", key, err), false
 	}
 	app, err := c.getSparkApplication(namespace, name)
 	if err != nil {
-		return err
+		return err, false
 	}
 	if app == nil {
 		// SparkApplication not found.
-		return nil
+		return nil, true
 	}
 	if !app.DeletionTimestamp.IsZero() {
 		c.handleSparkApplicationDeletion(app)
-		return nil
+		return nil, true
 	}
 
 	appCopy := app.DeepCopy()
@@ -620,7 +667,7 @@ func (c *Controller) syncSparkApplication(key string) error {
 			if err := c.deleteSparkResources(appCopy); err != nil {
 				glog.Errorf("failed to delete resources associated with SparkApplication %s/%s: %v",
 					appCopy.Namespace, appCopy.Name, err)
-				return err
+				return err, false
 			}
 			appCopy.Status.AppState.State = v1beta2.PendingRerunState
 		}
@@ -632,7 +679,7 @@ func (c *Controller) syncSparkApplication(key string) error {
 			if err := c.deleteSparkResources(appCopy); err != nil {
 				glog.Errorf("failed to delete resources associated with SparkApplication %s/%s: %v",
 					appCopy.Namespace, appCopy.Name, err)
-				return err
+				return err, false
 			}
 			appCopy.Status.AppState.State = v1beta2.PendingRerunState
 		}
@@ -648,7 +695,7 @@ func (c *Controller) syncSparkApplication(key string) error {
 				if err := c.deleteSparkResources(appCopy); err != nil {
 					glog.Errorf("failed to delete resources associated with SparkApplication %s/%s: %v",
 						appCopy.Namespace, appCopy.Name, err)
-					return err
+					return err, false
 				}
 			}
 		}
@@ -657,7 +704,7 @@ func (c *Controller) syncSparkApplication(key string) error {
 		if err := c.deleteSparkResources(appCopy); err != nil {
 			glog.Errorf("failed to delete resources associated with SparkApplication %s/%s: %v",
 				appCopy.Namespace, appCopy.Name, err)
-			return err
+			return err, false
 		}
 		c.clearStatus(&appCopy.Status)
 		appCopy.Status.AppState.State = v1beta2.PendingRerunState
@@ -671,19 +718,19 @@ func (c *Controller) syncSparkApplication(key string) error {
 		}
 	case v1beta2.SubmittedState, v1beta2.RunningState, v1beta2.UnknownState:
 		if err := c.getAndUpdateAppState(appCopy); err != nil {
-			return err
+			return err, false
 		}
 	case v1beta2.CompletedState, v1beta2.FailedState:
 		if c.hasApplicationExpired(app) {
 			glog.Infof("Garbage collecting expired SparkApplication %s/%s", app.Namespace, app.Name)
 			err := c.crdClient.SparkoperatorV1beta2().SparkApplications(app.Namespace).Delete(context.TODO(), app.Name, metav1.DeleteOptions{GracePeriodSeconds: int64ptr(0)})
 			if err != nil && !errors.IsNotFound(err) {
-				return err
+				return err, false
 			}
-			return nil
+			return nil, true
 		}
 		if err := c.getAndUpdateExecutorState(appCopy); err != nil {
-			return err
+			return err, false
 		}
 	}
 
@@ -691,19 +738,19 @@ func (c *Controller) syncSparkApplication(key string) error {
 		err = c.updateStatusAndExportMetrics(app, appCopy)
 		if err != nil {
 			glog.Errorf("failed to update SparkApplication %s/%s: %v", app.Namespace, app.Name, err)
-			return err
+			return err, false
 		}
 
 		if state := appCopy.Status.AppState.State; state == v1beta2.CompletedState ||
 			state == v1beta2.FailedState {
 			if err := c.cleanUpOnTermination(app, appCopy); err != nil {
 				glog.Errorf("failed to clean up resources for SparkApplication %s/%s: %v", app.Namespace, app.Name, err)
-				return err
+				return err, false
 			}
 		}
 	}
 
-	return nil
+	return nil, false
 }
 
 // Helper func to determine if the next retry the SparkApplication is due now.
@@ -1016,7 +1063,9 @@ func (c *Controller) enqueue(obj interface{}) {
 		glog.Errorf("failed to get key for %v: %v", obj, err)
 		return
 	}
-	c.ReturnRelevantQueue(key).AddRateLimited(key)
+	queueInfo := c.GetOrCreateRelevantQueue(key)
+	queueInfo.LastUpdateTs = time.Now()
+	queueInfo.Queue.AddRateLimited(key)
 }
 
 func (c *Controller) recordSparkApplicationEvent(app *v1beta2.SparkApplication) {
