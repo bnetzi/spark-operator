@@ -17,8 +17,9 @@
 set -o errexit
 set -o nounset
 set -o pipefail
-
+# set -x
 SCRIPT_ROOT=$(dirname ${BASH_SOURCE})/..
+
 
 # generate the code with:
 # --output-base    because this script should also be able to run inside the vendor dir of
@@ -29,6 +30,11 @@ ${SCRIPT_ROOT}/hack/generate-groups.sh "all" \
   sparkoperator.k8s.io:v1beta1,v1beta2 \
   --go-header-file "$(dirname ${BASH_SOURCE})/custom-boilerplate.go.txt" \
   --output-base "$(dirname ${BASH_SOURCE})/../../../.."
+
+# ${SCRIPT_ROOT}/hack/generate-groups.sh "all" \
+#   ./pkg/client ./pkg/apis \
+#   sparkoperator.k8s.io:v1beta1,v1beta2 \
+#   --go-header-file "$(dirname ${BASH_SOURCE})/custom-boilerplate.go.txt" -v 500
 
 # To use your own boilerplate text append:
 #   --go-header-file ${SCRIPT_ROOT}/hack/custom-boilerplate.go.txt
