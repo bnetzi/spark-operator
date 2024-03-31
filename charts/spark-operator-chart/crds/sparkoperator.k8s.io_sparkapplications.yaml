@@ -1186,6 +1186,10 @@ spec:
                       type: string
                     memoryOverhead:
                       type: string
+                    memoryLimit:
+                      type: string
+                    memoryRequestOverride:
+                      type: string
                     nodeSelector:
                       additionalProperties:
                         type: string
@@ -2911,6 +2915,10 @@ spec:
                     memory:
                       type: string
                     memoryOverhead:
+                      type: string
+                    memoryLimit:
+                      type: string
+                    memoryRequestOverride:
                       type: string
                     nodeSelector:
                       additionalProperties:
