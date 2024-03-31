@@ -14,7 +14,7 @@
 # limitations under the License.
 #
 
-ARG SPARK_IMAGE=720146705806.dkr.ecr.us-east-1.amazonaws.com/rem-helm-images/rem-apps/spark-operator:latest
+ARG SPARK_IMAGE=gcr.io/spark-operator/spark:v3.1.1
 
 FROM golang:1.19.2-alpine as builder
 
