@@ -454,6 +454,10 @@ type SparkPodSpec struct {
 	// MemoryLimit is the pod limit, used in cases we want to enable the memory limit for the pod.
 	// +optional
 	MemoryLimit *string `json:"memoryLimit,omitempty"`
+	// MemoryRequestOverride is an optional paramter, enables to define pod memory request that is less than the java memory + overhead
+	// Which is used in spark by default.
+	// +optional
+	MemoryRequestOverride *string `json:"memoryRequestOverride,omitempty"`
 	// GPU specifies GPU requirement for the pod.
 	// +optional
 	GPU *GPUSpec `json:"gpu,omitempty"`
