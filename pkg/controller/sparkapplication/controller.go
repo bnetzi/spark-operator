@@ -326,6 +326,7 @@ func (c *Controller) onDelete(obj interface{}) {
 
 // LogQueuesKeys LogMapKeys logs the keys of the myMap field at debug level 2
 func (c *Controller) LogQueuesKeys() {
+	glog.V(0).Infof("Amount of queues is %d", len(c.appQueues))
 	var keys []string
 	for key := range c.appQueues {
 		keys = append(keys, key)
@@ -340,6 +341,7 @@ func (c *Controller) deleteImmediateQueue(appName string) {
 	c.GetOrCreateRelevantQueue(appName).Queue.ShutDown()
 	delete(c.appQueues, appName)
 	glog.V(0).Infof("Succesfully deleted queue for app %v", appName)
+	glog.V(0).Infof("Amount of queues is %d", len(c.appQueues))
 }
 
 // runWorker runs a single controller worker.
@@ -347,14 +349,13 @@ func (c *Controller) runWorker(appName string) {
 	defer utilruntime.HandleCrash()
 	glog.V(1).Infof("Running worker %v of the SparkApplication controller", appName)
 	for c.processNextItem(appName) {
+		c.LogQueuesKeys()
 	}
 }
 
 // processNextItem processes the next item in the queue.
 func (c *Controller) processNextItem(appName string) bool {
 	glog.V(2).Infof("Waiting for a message in queue of app %v of the SparkApplication controller", appName)
-	glog.V(2).Infof("Amount of queues is %d", len(c.appQueues))
-	c.LogQueuesKeys()
 	queue := c.GetOrCreateRelevantQueue(appName).Queue
 	key, quit := queue.Get()
 

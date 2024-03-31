@@ -126,27 +126,6 @@ func addOwnerReference(pod *corev1.Pod, app *v1beta2.SparkApplication) patchOper
 	return patchOperation{Op: "add", Path: path, Value: value}
 }
 
-// Function to add memory limit to the container
-func addMemoryLimit(pod *corev1.Pod, app *v1beta2.SparkApplication) *patchOperation {
-	i := findContainer(pod)
-	if i < 0 {
-		glog.Warningf("not able to add memory limit as Spark container was not found in pod %s", pod.Name)
-		return nil
-	}
-	var memoryLimit *resource.Quantity
-	if util.IsDriverPod(pod) {
-		memoryLimit = app.Spec.Driver.MemoryLimit
-	} else if util.IsExecutorPod(pod) {
-		memoryLimit = app.Spec.Executor.MemoryLimit
-	}
-
-	if memoryLimit == nil {
-		return nil
-	}
-
-	return &patchOperation{Op: "add", Path: fmt.Sprintf("/spec/containers/%d/resources/limits/memory", i), Value: *memoryLimit} 
-}
-
 func addVolumes(pod *corev1.Pod, app *v1beta2.SparkApplication) []patchOperation {
 	volumes := app.Spec.Volumes
 
