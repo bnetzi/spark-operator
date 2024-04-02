@@ -74,8 +74,8 @@ var (
 	metricsEndpoint                    = flag.String("metrics-endpoint", "/metrics", "Metrics endpoint.")
 	metricsPrefix                      = flag.String("metrics-prefix", "", "Prefix for the metrics.")
 	ingressClassName                   = flag.String("ingress-class-name", "", "Set ingressClassName for ingress resources created.")
-	maxQueueTimeWithoutUpdateInMinutes = flag.Duration("max-queue-time-without-update-in-minutes", 30*time.Minute, "Sets the maximum time that queue can be without update before it is considered as deleted.")
-	queueCleanerIntervalInMinutes      = flag.Duration("queue-cleaner-interval-in-minutes", 30*time.Minute, "Sets the interval time for the queue cleaner.")
+	maxQueueTimeWithoutUpdateInMinutes = flag.Int("max-queue-time-without-update-in-minutes", 30, "Sets the maximum time that queue can be without update before it is considered as deleted.")
+	queueCleanerIntervalInMinutes      = flag.Int("queue-cleaner-interval-in-minutes", 30, "Sets the interval time for the queue cleaner.")
 
 	metricsLabels                 util.ArrayFlags
 	metricsJobStartLatencyBuckets util.HistogramBuckets = util.DefaultJobStartLatencyBuckets
@@ -230,8 +230,9 @@ func main() {
 	}
 
 	glog.Info("Starting application controller goroutines")
-
-	if err = applicationController.Start(*maxQueueTimeWithoutUpdateInMinutes, *queueCleanerIntervalInMinutes, stopCh); err != nil {
+	queueCleanerIntervalDuration := time.Duration(*queueCleanerIntervalInMinutes) * time.Minute
+	maxQueueTimeWithoutUpdateDuration := time.Duration(*maxQueueTimeWithoutUpdateInMinutes) * time.Minute
+	if err = applicationController.Start(maxQueueTimeWithoutUpdateDuration, queueCleanerIntervalDuration, stopCh); err != nil {
 		glog.Fatal(err)
 	}
 	if err = scheduledApplicationController.Start(*controllerThreads, stopCh); err != nil {

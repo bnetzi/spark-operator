@@ -219,12 +219,21 @@ func (c *Controller) StartQueueCleanupRoutine(checkInterval time.Duration, maxAg
 
 // cleanupQueues deletes the queues for SparkApplications that have not been updated for a certain period.
 func (c *Controller) cleanupQueues(maxAge time.Duration) {
+	if len(c.appQueues) == 0 {
+		glog.V(0).Info("No queues to clean up, skipping cleanup")
+		return
+	}
+	queuesBefore := len(c.appQueues)
 	now := time.Now()
+	glog.V(0).Infof("Cleaning up queues for SparkApplications at time: %v", now)
 	for appName, queueInfo := range c.appQueues {
+		glog.V(0).Infof("Checking queue for app %v", appName)
 		if now.Sub(queueInfo.LastUpdateTs) > maxAge {
+			glog.V(0).Infof("Sending %v to deletion due to inactivity", appName)
 			c.deleteImmediateQueue(appName)
 		}
 	}
+	glog.V(0).Infof("Cleaned up %d queues, %d remaining", queuesBefore-len(c.appQueues), len(c.appQueues))
 }
 
 // StopQueueCleanupRoutine stops the go routine that cleans up queues.
@@ -317,10 +326,10 @@ func (c *Controller) onDelete(obj interface{}) {
 			"SparkApplicationDeleted",
 			"SparkApplication %s was deleted",
 			app.Name)
-
-		if appName, ok := obj.(string); ok {
-			c.GetOrCreateRelevantQueue(appName).Queue.AddRateLimited("ToDelete")
-		}
+	}
+	if appName, ok := obj.(string); ok {
+		c.GetOrCreateRelevantQueue(appName).Queue.AddRateLimited("ToDelete")
+		glog.V(0).Infof("Enqueued %v for deletion", appName)
 	}
 }
 
@@ -364,6 +373,7 @@ func (c *Controller) processNextItem(appName string) bool {
 	}
 
 	if keyStr, ok := key.(string); ok && keyStr == "ToDelete" {
+		glog.V(0).Infof("Got message from event to delete the queue for app %v", appName)
 		c.deleteImmediateQueue(appName)
 	}
 	defer queue.Done(key)
@@ -372,6 +382,7 @@ func (c *Controller) processNextItem(appName string) bool {
 	defer glog.V(2).Infof("Ending processing key: %q", key)
 	err, deleteQueue := c.syncSparkApplication(key.(string))
 	if deleteQueue {
+		glog.V(0).Infof("Sending %v to deletion due to Failed or Completed state", key)
 		c.deleteImmediateQueue(appName)
 		return false
 	}
@@ -726,7 +737,7 @@ func (c *Controller) syncSparkApplication(key string) (error, bool) {
 			glog.Infof("Garbage collecting expired SparkApplication %s/%s", app.Namespace, app.Name)
 			err := c.crdClient.SparkoperatorV1beta2().SparkApplications(app.Namespace).Delete(context.TODO(), app.Name, metav1.DeleteOptions{GracePeriodSeconds: int64ptr(0)})
 			if err != nil && !errors.IsNotFound(err) {
-				return err, false
+				return err, true
 			}
 			return nil, true
 		}
