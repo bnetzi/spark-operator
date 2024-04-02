@@ -219,6 +219,7 @@ func (c *Controller) StartQueueCleanupRoutine(checkInterval time.Duration, maxAg
 
 // cleanupQueues deletes the queues for SparkApplications that have not been updated for a certain period.
 func (c *Controller) cleanupQueues(maxAge time.Duration) {
+	c.LogQueuesKeys()
 	if len(c.appQueues) == 0 {
 		glog.V(0).Info("No queues to clean up, skipping cleanup")
 		return
@@ -233,7 +234,8 @@ func (c *Controller) cleanupQueues(maxAge time.Duration) {
 			c.deleteImmediateQueue(appName)
 		}
 	}
-	glog.V(0).Infof("Cleaned up %d queues, %d remaining", queuesBefore-len(c.appQueues), len(c.appQueues))
+	queuesAfter := len(c.appQueues)
+	glog.V(0).Infof("Cleaned up %d queues, %d remaining", queuesBefore-queuesAfter, queuesAfter)
 }
 
 // StopQueueCleanupRoutine stops the go routine that cleans up queues.
@@ -335,14 +337,13 @@ func (c *Controller) onDelete(obj interface{}) {
 
 // LogQueuesKeys LogMapKeys logs the keys of the myMap field at debug level 2
 func (c *Controller) LogQueuesKeys() {
-	glog.V(0).Infof("Amount of queues is %d", len(c.appQueues))
 	var keys []string
 	for key := range c.appQueues {
 		keys = append(keys, key)
 	}
 
 	keysStr := strings.Join(keys, ", ")
-	glog.V(2).Info("The queues are: ", keysStr)
+	glog.V(0).Info("The queues are: ", keysStr)
 }
 
 // deleteImmediateQueue deletes the queue for the given app immediately
@@ -358,7 +359,6 @@ func (c *Controller) runWorker(appName string) {
 	defer utilruntime.HandleCrash()
 	glog.V(1).Infof("Running worker %v of the SparkApplication controller", appName)
 	for c.processNextItem(appName) {
-		c.LogQueuesKeys()
 	}
 }
 

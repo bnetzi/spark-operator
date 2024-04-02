@@ -75,7 +75,7 @@ var (
 	metricsPrefix                      = flag.String("metrics-prefix", "", "Prefix for the metrics.")
 	ingressClassName                   = flag.String("ingress-class-name", "", "Set ingressClassName for ingress resources created.")
 	maxQueueTimeWithoutUpdateInMinutes = flag.Int("max-queue-time-without-update-in-minutes", 30, "Sets the maximum time that queue can be without update before it is considered as deleted.")
-	queueCleanerIntervalInMinutes      = flag.Int("queue-cleaner-interval-in-minutes", 30, "Sets the interval time for the queue cleaner.")
+	queueCleanerIntervalInMinutes      = flag.Int("queue-cleaner-interval-in-minutes", 10, "Sets the interval time for the queue cleaner.")
 
 	metricsLabels                 util.ArrayFlags
 	metricsJobStartLatencyBuckets util.HistogramBuckets = util.DefaultJobStartLatencyBuckets
