@@ -92,9 +92,9 @@ func (c *Controller) GetOrCreateRelevantQueue(appName string) AppQueueInfo {
 	queueInfo, exists := c.appQueues[appName]
 	if !exists {
 		// Create a new queue for the app
-		controllerName := fmt.Sprintf("spark-application-controller-%v", appName)
+		queueName := fmt.Sprintf("spark-application-queue-%v", appName)
 		queue := workqueue.NewNamedRateLimitingQueue(&workqueue.BucketRateLimiter{Limiter: rate.NewLimiter(rate.Limit(queueTokenRefillRate), queueTokenBucketSize)},
-			controllerName)
+			queueName)
 
 		queueInfo := AppQueueInfo{
 			Queue:        queue,
