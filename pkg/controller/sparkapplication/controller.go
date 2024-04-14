@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang/glog"
@@ -91,6 +92,17 @@ type Controller struct {
 func (c *Controller) GetOrCreateRelevantQueue(appName string) AppQueueInfo {
 	queueInfo, exists := c.appQueues[appName]
 	if !exists {
+		// lock a mutex to prevent concurrent write access to the map
+		var mutex sync.Mutex
+
+		mutex.Lock()
+		defer mutex.Unlock()
+		// check if the queue was created while locking the mutex
+		queueInfo, exists = c.appQueues[appName]
+		if exists {
+			return queueInfo
+		}
+
 		// Create a new queue for the app
 		queueName := fmt.Sprintf("spark-application-queue-%v", appName)
 		queue := workqueue.NewNamedRateLimitingQueue(&workqueue.BucketRateLimiter{Limiter: rate.NewLimiter(rate.Limit(queueTokenRefillRate), queueTokenBucketSize)},
