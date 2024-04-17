@@ -77,6 +77,7 @@ type AppQueueInfo struct {
 type Controller struct {
 	crdClient         crdclientset.Interface
 	kubeClient        clientset.Interface
+	appQueuesMutex    sync.RWMutex
 	appQueues         map[string]AppQueueInfo
 	cacheSynced       cache.InformerSynced
 	recorder          record.EventRecorder
@@ -90,13 +91,12 @@ type Controller struct {
 }
 
 func (c *Controller) GetOrCreateRelevantQueue(appName string) AppQueueInfo {
+	c.appQueuesMutex.RLock()
 	queueInfo, exists := c.appQueues[appName]
+	c.appQueuesMutex.RUnlock()
 	if !exists {
-		// lock a mutex to prevent concurrent write access to the map
-		var mutex sync.Mutex
-
-		mutex.Lock()
-		defer mutex.Unlock()
+		c.appQueuesMutex.Lock()
+		defer c.appQueuesMutex.Unlock()
 		// check if the queue was created while locking the mutex
 		queueInfo, exists = c.appQueues[appName]
 		if exists {
@@ -239,13 +239,24 @@ func (c *Controller) cleanupQueues(maxAge time.Duration) {
 	queuesBefore := len(c.appQueues)
 	now := time.Now()
 	glog.V(0).Infof("Cleaning up queues for SparkApplications at time: %v", now)
+	// we prevent deadlock we mark the quesues for deletion and delete them outside the lock
+	var queuesToDelete []string
+	c.appQueuesMutex.RLock()
 	for appName, queueInfo := range c.appQueues {
 		glog.V(0).Infof("Checking queue for app %v", appName)
 		if now.Sub(queueInfo.LastUpdateTs) > maxAge {
 			glog.V(0).Infof("Sending %v to deletion due to inactivity", appName)
+			queuesToDelete = append(queuesToDelete, appName)
 			c.deleteImmediateQueue(appName)
 		}
 	}
+	c.appQueuesMutex.RUnlock()
+	c.appQueuesMutex.Lock()
+	defer c.appQueuesMutex.Unlock()
+	for _, appName := range queuesToDelete {
+		c.deleteImmediateQueue(appName)
+	}
+
 	queuesAfter := len(c.appQueues)
 	glog.V(0).Infof("Cleaned up %d queues, %d remaining", queuesBefore-queuesAfter, queuesAfter)
 }
@@ -361,6 +372,8 @@ func (c *Controller) LogQueuesKeys() {
 // deleteImmediateQueue deletes the queue for the given app immediately
 func (c *Controller) deleteImmediateQueue(appName string) {
 	c.GetOrCreateRelevantQueue(appName).Queue.ShutDown()
+	c.appQueuesMutex.Lock()
+	defer c.appQueuesMutex.Unlock()
 	delete(c.appQueues, appName)
 	glog.V(0).Infof("Succesfully deleted queue for app %v", appName)
 	glog.V(0).Infof("Amount of queues is %d", len(c.appQueues))
