@@ -53,7 +53,7 @@ import (
 var (
 	master                             = flag.String("master", "", "The address of the Kubernetes API server. Overrides any value in kubeconfig. Only required if out-of-cluster.")
 	kubeConfig                         = flag.String("kubeConfig", "", "Path to a kube config. Only required if out-of-cluster.")
-	controllerThreads                  = flag.Int("controller-threads", 10, "Number of worker threads used by the SparkApplication controller.")
+	controllerThreads                  = flag.Int("controller-threads", 10, "Number of app queues map that will be created and used by the SparkApplication controller.")
 	resyncInterval                     = flag.Int("resync-interval", 30, "Informer resync interval in seconds.")
 	namespace                          = flag.String("namespace", apiv1.NamespaceAll, "The Kubernetes namespace to manage. Will manage custom resource objects of the managed CRD types for the whole cluster if unset.")
 	labelSelectorFilter                = flag.String("label-selector-filter", "", "A comma-separated list of key=value, or key labels to filter resources during watch and list based on the specified labels.")
@@ -188,7 +188,7 @@ func main() {
 	}
 
 	applicationController := sparkapplication.NewController(
-		crClient, kubeClient, crInformerFactory, podInformerFactory, metricConfig, *namespace, *ingressURLFormat, *ingressClassName, batchSchedulerMgr, *enableUIService)
+		crClient, kubeClient, crInformerFactory, podInformerFactory, metricConfig, *namespace, *ingressURLFormat, *ingressClassName, batchSchedulerMgr, *enableUIService, *controllerThreads)
 	scheduledApplicationController := scheduledsparkapplication.NewController(
 		crClient, kubeClient, apiExtensionsClient, crInformerFactory, clock.RealClock{})
 
