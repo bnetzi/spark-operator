@@ -283,12 +283,9 @@ func (c *Controller) cleanupQueues(maxAge time.Duration) {
 			if now.Sub(queueInfo.LastUpdateTs) > maxAge {
 				glog.V(0).Infof("Sending %v to deletion due to inactivity", appName)
 				queuesToDelete = append(queuesToDelete, appName)
-				c.deleteImmediateQueue(appName)
 			}
 		}
 		currL.RUnlock()
-		currL.Lock()
-		defer currL.Unlock()
 		for _, appName := range queuesToDelete {
 			c.deleteImmediateQueue(appName)
 		}
