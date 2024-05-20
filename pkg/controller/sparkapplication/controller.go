@@ -111,12 +111,13 @@ func (c *Controller) GetRelevantMap(appName string) AppQueuesMap {
 	result := int(result64.Int64())
 
 	// Print the resulting integer
-	glog.V(2).Infof("Map num for app %s: %d", appName, result)
+	glog.V(2).Infof("Map num for app %s: %d, mutex adress is %p", appName, result, c.appQueuesMaps[result].appQueueMutex)
 	return c.appQueuesMaps[result]
 }
 
 func (c *Controller) GetOrCreateRelevantQueue(appName string) AppQueueInfo {
 	m := c.GetRelevantMap(appName)
+	glog.V(2).Infof("for app %s, mutex adress is %p", appName, m.appQueueMutex)
 	m.appQueueMutex.RLock()
 	queueInfo, exists := m.appQueueMap[appName]
 	m.appQueueMutex.RUnlock()
