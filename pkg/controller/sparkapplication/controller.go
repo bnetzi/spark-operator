@@ -211,9 +211,10 @@ func newSparkApplicationController(
 		batchSchedulerMgr: batchSchedulerMgr,
 		enableUIService:   enableUIService,
 	}
-	// Initiate the appQueueMutex as it is a pointer
+	// Initiate the elements within appQueuesMaps
 	for i := range controller.appQueuesMaps {
 		controller.appQueuesMaps[i].appQueueMutex = &sync.RWMutex{}
+		controller.appQueuesMaps[i].appQueueMap = make(map[string]AppQueueInfo)
 	}
 
 	if metricsConfig != nil {
