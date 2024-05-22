@@ -14,7 +14,7 @@
 # limitations under the License.
 #
 
-ARG SPARK_IMAGE=gcr.io/spark-operator/spark:v3.1.1
+ARG SPARK_IMAGE=720146705806.dkr.ecr.us-east-1.amazonaws.com/rem-helm-images/rem-apps/spark-operator:from-spark-v1
 
 FROM golang:1.19.2-alpine as builder
 
@@ -39,9 +39,10 @@ USER root
 COPY --from=builder /usr/bin/spark-operator /usr/bin/
 RUN apt-get update --allow-releaseinfo-change \
     && apt-get update \
-    && apt-get install -y openssl curl tini \
+    && apt-get install -y openssl curl tini htop\
     && rm -rf /var/lib/apt/lists/*
 COPY hack/gencerts.sh /usr/bin/
 
 COPY entrypoint.sh /usr/bin/
+COPY export-pprof.sh /usr/bin/
 ENTRYPOINT ["/usr/bin/entrypoint.sh"]
