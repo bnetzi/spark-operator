@@ -82,6 +82,8 @@ var (
 	ingressClassName                   = flag.String("ingress-class-name", "", "Set ingressClassName for ingress resources created.")
 	maxQueueTimeWithoutUpdateInMinutes = flag.Int("max-queue-time-without-update-in-minutes", 30, "Sets the maximum time that queue can be without update before it is considered as deleted.")
 	queueCleanerIntervalInMinutes      = flag.Int("queue-cleaner-interval-in-minutes", 10, "Sets the interval time for the queue cleaner.")
+	apiQps      					   = flag.Float64("api-qps", 100.00, "k8s api qps configuration")
+	apiBurst      					   = flag.Int("api-burst", 200, "k8s api burst configuration")
 
 	metricsLabels                 util.ArrayFlags
 	metricsJobStartLatencyBuckets util.HistogramBuckets = util.DefaultJobStartLatencyBuckets
@@ -89,7 +91,6 @@ var (
 
 func main() {
 
-	runtime.SetMutexProfileFraction(1) // Enable mutex profiling
 
 	flag.Var(&metricsLabels, "metrics-labels", "Labels for the metrics")
 	flag.Var(&metricsJobStartLatencyBuckets, "metrics-job-start-latency-buckets",
@@ -102,6 +103,8 @@ func main() {
 	if err != nil {
 		glog.Fatal(err)
 	}
+	config.QPS = float32(*apiQps) 
+	config.Burst = *apiBurst 
 	kubeClient, err := clientset.NewForConfig(config)
 	if err != nil {
 		glog.Fatal(err)
@@ -115,6 +118,7 @@ func main() {
 
 	go func() {
 		if *enableProfiling {
+			runtime.SetMutexProfileFraction(1) // Enable mutex profiling
 			log.Println(http.ListenAndServe("localhost:6060", nil))
 		}
 	}()
