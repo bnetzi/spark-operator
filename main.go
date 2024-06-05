@@ -20,6 +20,8 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -49,12 +51,16 @@ import (
 	"github.com/kubeflow/spark-operator/pkg/controller/sparkapplication"
 	"github.com/kubeflow/spark-operator/pkg/util"
 	"github.com/kubeflow/spark-operator/pkg/webhook"
+
+	_ "net/http/pprof"
+    	"runtime"
 )
 
 var (
 	master                             = flag.String("master", "", "The address of the Kubernetes API server. Overrides any value in kubeconfig. Only required if out-of-cluster.")
 	kubeConfig                         = flag.String("kubeConfig", "", "Path to a kube config. Only required if out-of-cluster.")
-	controllerThreads                  = flag.Int("controller-threads", 10, "Number of worker threads used by the SparkApplication controller.")
+	controllerThreads                  = flag.Int("controller-threads", 10, "Number of app queues map that will be created and used by the SparkApplication controller.")
+	enableProfiling                    = flag.Bool("enable-profiling", false, "Whether to enable pprof server profiling")
 	resyncInterval                     = flag.Int("resync-interval", 30, "Informer resync interval in seconds.")
 	namespace                          = flag.String("namespace", apiv1.NamespaceAll, "The Kubernetes namespace to manage. Will manage custom resource objects of the managed CRD types for the whole cluster if unset.")
 	labelSelectorFilter                = flag.String("label-selector-filter", "", "A comma-separated list of key=value, or key labels to filter resources during watch and list based on the specified labels.")
@@ -77,12 +83,16 @@ var (
 	ingressClassName                   = flag.String("ingress-class-name", "", "Set ingressClassName for ingress resources created.")
 	maxQueueTimeWithoutUpdateInMinutes = flag.Int("max-queue-time-without-update-in-minutes", 30, "Sets the maximum time that queue can be without update before it is considered as deleted.")
 	queueCleanerIntervalInMinutes      = flag.Int("queue-cleaner-interval-in-minutes", 10, "Sets the interval time for the queue cleaner.")
+	apiQps      					   = flag.Float64("api-qps", 100.00, "k8s api qps configuration")
+	apiBurst      					   = flag.Int("api-burst", 200, "k8s api burst configuration")
 
 	metricsLabels                 util.ArrayFlags
 	metricsJobStartLatencyBuckets util.HistogramBuckets = util.DefaultJobStartLatencyBuckets
 )
 
 func main() {
+
+
 	flag.Var(&metricsLabels, "metrics-labels", "Labels for the metrics")
 	flag.Var(&metricsJobStartLatencyBuckets, "metrics-job-start-latency-buckets",
 		"Comma-separated boundary values (in seconds) for the job start latency histogram bucket; "+
@@ -94,6 +104,8 @@ func main() {
 	if err != nil {
 		glog.Fatal(err)
 	}
+	config.QPS = float32(*apiQps)
+	config.Burst = *apiBurst
 	kubeClient, err := clientset.NewForConfig(config)
 	if err != nil {
 		glog.Fatal(err)
@@ -104,6 +116,13 @@ func main() {
 
 	stopCh := make(chan struct{}, 1)
 	startCh := make(chan struct{}, 1)
+
+	go func() {
+		if *enableProfiling {
+			runtime.SetMutexProfileFraction(1) // Enable mutex profiling
+			log.Println(http.ListenAndServe("localhost:6060", nil))
+		}
+	}()
 
 	if *enableLeaderElection {
 		podName := os.Getenv("POD_NAME")
@@ -194,7 +213,7 @@ func main() {
 	}
 
 	applicationController := sparkapplication.NewController(
-		crClient, kubeClient, crInformerFactory, podInformerFactory, metricConfig, *namespace, *ingressURLFormat, *ingressClassName, batchSchedulerMgr, *enableUIService)
+		crClient, kubeClient, crInformerFactory, podInformerFactory, metricConfig, *namespace, *ingressURLFormat, *ingressClassName, batchSchedulerMgr, *enableUIService, *controllerThreads)
 	scheduledApplicationController := scheduledsparkapplication.NewController(
 		crClient, kubeClient, apiExtensionsClient, crInformerFactory, clock.RealClock{})
 
