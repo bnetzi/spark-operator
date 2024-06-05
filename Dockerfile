@@ -14,9 +14,9 @@
 # limitations under the License.
 #
 
-ARG SPARK_IMAGE=720146705806.dkr.ecr.us-east-1.amazonaws.com/rem-helm-images/rem-apps/spark-operator:from-spark-v1
+ARG SPARK_IMAGE=spark:3.5.0
 
-FROM golang:1.19.2-alpine as builder
+FROM golang:1.22-alpine as builder
 
 WORKDIR /workspace
 
@@ -32,7 +32,8 @@ COPY main.go main.go
 COPY pkg/ pkg/
 
 # Build
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GO111MODULE=on go build -a -o /usr/bin/spark-operator main.go
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} GO111MODULE=on go build -a -o /usr/bin/spark-operator main.go
 
 FROM ${SPARK_IMAGE}
 USER root

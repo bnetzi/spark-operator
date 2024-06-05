@@ -11,7 +11,7 @@ replicaCount: 1
 
 image:
   # -- Image repository
-  repository: ghcr.io/googlecloudplatform/spark-operator
+  repository: docker.io/kubeflow/spark-operator
   # -- Image pull policy
   pullPolicy: IfNotPresent
   # -- if set, override the image tag whose default is the chart appVersion.
@@ -52,8 +52,9 @@ serviceAccounts:
     # -- Optional annotations for the operator service account
     annotations: {}
 
-# -- Set this if running spark jobs in a different namespace than the operator
-sparkJobNamespace: ""
+# -- List of namespaces where to run spark jobs, operator namespace is included only when list of namespaces is empty
+sparkJobNamespaces: []
+# - ns1
 
 # -- Operator concurrency, higher values might increase memory usage
 controllerThreads: 10
@@ -96,6 +97,8 @@ webhook:
   enable: false
   # -- Webhook service port
   port: 8080
+  # -- Webhook container port name and service target port name
+  portName: webhook
   # -- The webhook server will only operate on namespaces with this label, specified in the form key1=value1,key2=value2.
   # Empty string (default) will operate on all namespaces
   namespaceSelector: ""
@@ -105,6 +108,14 @@ webhook:
     "helm.sh/hook-weight": "50"
   # -- The podLabels applied to the pod of the init job
   initPodLabels: {}
+  # -- Resources applied to init job
+  initResources: {}
+  # limits:
+  #   cpu: 100m
+  #   memory: 300Mi
+  # requests:
+  #   cpu: 100m
+  #   memory: 300Mi
   # -- The annotations applied to the cleanup job, required for helm lifecycle hooks
   cleanupAnnotations:
     "helm.sh/hook": pre-delete, pre-upgrade
@@ -112,6 +123,15 @@ webhook:
     # -- Webhook Timeout in seconds
   # -- The podLabels applied to the pod of the cleanup job
   cleanupPodLabels: {}
+  # -- Resources applied to cleanup job
+  cleanupResources: {}
+  # limits:
+  #   cpu: 100m
+  #   memory: 300Mi
+  # requests:
+  #   cpu: 100m
+  #   memory: 300Mi
+
   timeout: 30
 
 metrics:
@@ -173,12 +193,12 @@ batchScheduler:
 resourceQuotaEnforcement:
   # -- Whether to enable the ResourceQuota enforcement for SparkApplication resources.
   # Requires the webhook to be enabled by setting `webhook.enable` to true.
-  # Ref: https://github.com/GoogleCloudPlatform/spark-on-k8s-operator/blob/master/docs/user-guide.md#enabling-resource-quota-enforcement.
+  # Ref: https://github.com/kubeflow/spark-operator/blob/master/docs/user-guide.md#enabling-resource-quota-enforcement.
   enable: false
 
 leaderElection:
   # -- Leader election lock name.
-  # Ref: https://github.com/GoogleCloudPlatform/spark-on-k8s-operator/blob/master/docs/user-guide.md#enabling-leader-election-for-high-availability.
+  # Ref: https://github.com/kubeflow/spark-operator/blob/master/docs/user-guide.md#enabling-leader-election-for-high-availability.
   lockName: "spark-operator-lock"
   # -- Optionally store the lock in another namespace. Defaults to operator's namespace
   lockNamespace: ""
