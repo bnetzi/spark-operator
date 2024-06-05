@@ -31,12 +31,11 @@ wait
 echo "Starting to fetch final Goroutine profile after waiting for other profiles to complete..."
 fetch_goroutine_profile "end"
 
-echo "All profiling data collected. Beginning upload to S3 bucket at $(date)..."
+echo "All profiling data collected"
 
 # Copying profiles to S3 bucket
-aws s3 cp "$cpu_profile" "s3://rem-spark-config-run-dev/users/netanel/spark-operator-profile/" && echo "CPU profile uploaded successfully."
-aws s3 cp "$trace_profile" "s3://rem-spark-config-run-dev/users/netanel/spark-operator-profile/" && echo "Trace profile uploaded successfully."
-aws s3 cp "/tmp/goroutine-profile-debug1-start-$timestamp.prof" "s3://rem-spark-config-run-dev/users/netanel/spark-operator-profile/" && echo "Initial Goroutine profile uploaded successfully."
-aws s3 cp "/tmp/goroutine-profile-debug1-end-$timestamp.prof" "s3://rem-spark-config-run-dev/users/netanel/spark-operator-profile/" && echo "Final Goroutine profile uploaded successfully."
+echo "CPU profile output - $cpu_profile"
+echo "Trace profile output - $trace_profile"
+echo "Initial Goroutine profile output - /tmp/goroutine-profile-debug1-start-$timestamp.prof"
+echo "Final Goroutine profile output - /tmp/goroutine-profile-debug1-end-$timestamp.prof"
 
-echo "All profiles successfully uploaded to S3 bucket at $(date)."
