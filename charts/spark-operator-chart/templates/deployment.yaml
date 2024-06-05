@@ -3,7 +3,7 @@
 
 # In the post-install hook, the token corresponding to the operator service account
 # is used to authenticate with the Kubernetes API server to install the secret bundle.
-{{- $jobNamespaces := .Values.sparkJobNamespaces | default (list .Release.Namespace) }}
+{{- $jobNamespaces := .Values.sparkJobNamespaces | default list }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -48,6 +48,14 @@ spec:
       - name: {{ .Chart.Name }}
         image: {{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
+        {{- if gt (int .Values.replicaCount) 1 }}
+        env:
+          - name: POD_NAME
+            valueFrom:
+              fieldRef:
+                apiVersion: v1
+                fieldPath: metadata.name
+        {{- end }}
         envFrom:
           {{- toYaml .Values.envFrom | nindent 10 }}
         securityContext:
@@ -66,7 +74,7 @@ spec:
         args:
         - -v={{ .Values.logLevel }}
         - -logtostderr
-        {{- if le (len $jobNamespaces) 1 }}
+        {{- if eq (len $jobNamespaces) 1 }}
         - -namespace={{ index $jobNamespaces 0 }}
         {{- end }}
         - -enable-ui-service={{ .Values.uiService.enable}}
@@ -84,11 +92,13 @@ spec:
         {{- end }}
         {{- if .Values.webhook.enable }}
         - -enable-webhook=true
+        - -webhook-secret-name={{ include "spark-operator.webhookSecretName" . }}
+        - -webhook-secret-namespace={{ .Release.Namespace }}
+        - -webhook-svc-name={{ include "spark-operator.webhookServiceName" . }}
         - -webhook-svc-namespace={{ .Release.Namespace }}
+        - -webhook-config-name={{ include "spark-operator.fullname" . }}-webhook-config
         - -webhook-port={{ .Values.webhook.port }}
         - -webhook-timeout={{ .Values.webhook.timeout }}
-        - -webhook-svc-name={{ include "spark-operator.fullname" . }}-webhook
-        - -webhook-config-name={{ include "spark-operator.fullname" . }}-webhook-config
         - -webhook-namespace-selector={{ .Values.webhook.namespaceSelector }}
         {{- end }}
         - -enable-resource-quota-enforcement={{ .Values.resourceQuotaEnforcement.enable }}
@@ -101,30 +111,17 @@ spec:
         resources:
           {{- toYaml . | nindent 10 }}
         {{- end }}
-        {{- if or .Values.webhook.enable (ne (len .Values.volumeMounts) 0 ) }}
-        volumeMounts:
-        {{- end }}
-          {{- if .Values.webhook.enable }}
-          - name: webhook-certs
-            mountPath: /etc/webhook-certs
-          {{- end }}
         {{- with .Values.volumeMounts }}
-        {{- toYaml . | nindent 10 }}
+        volumeMounts:
+          {{- toYaml . | nindent 10 }}
         {{- end }}
       {{- with .Values.sidecars }}
         {{- toYaml . | nindent 6 }}
       {{- end }}
-      {{- if or .Values.webhook.enable (ne (len .Values.volumes) 0 ) }}
+      {{- with .Values.volumes }}
       volumes:
-      {{- end }}
-        {{- if .Values.webhook.enable }}
-        - name: webhook-certs
-          secret:
-            secretName: {{ include "spark-operator.fullname" . }}-webhook-certs
-        {{- end }}
-        {{- with .Values.volumes }}
         {{- toYaml . | nindent 8 }}
-        {{- end }}
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
