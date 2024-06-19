@@ -17,7 +17,8 @@
 set -o errexit
 set -o nounset
 set -o pipefail
-
+# for debugging uncomment the following line
+# set -x
 SCRIPT_ROOT=$(dirname ${BASH_SOURCE})/..
 
 # generate the code with:
