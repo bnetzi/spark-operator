@@ -96,16 +96,16 @@ func TestOnAdd(t *testing.T) {
 		Status: v1beta2.SparkApplicationStatus{},
 	}
 	// Initiated now ts
-	before := time.Now() 
+	before := time.Now()
 
 	ctrl.onAdd(app)
-	after := time.Now() 
+	after := time.Now()
 	m := ctrl.GetRelevantMap(app.Name)
 	// Check that m is not nil.
 	assert.NotNil(t, m)
 	// Check that m.appQueueMap[appName].Queue is not nil.
 	assert.NotNil(t, m.appQueueMap[app.Name])
-	// Check that m.appQueueMap[appName].LastUpdateTs is higer than now.	
+	// Check that m.appQueueMap[appName].LastUpdateTs is higer than now.
     // print last update ts
 	fmt.Println(m.appQueueMap[app.Name])
 	fmt.Println(before)
@@ -185,7 +185,7 @@ func TestOnUpdate(t *testing.T) {
 	ctrl.onUpdate(appTemplate, copyWithSpecUpdate)
 
 	// Verify App was enqueued.
-	
+
 	item, _ = q.Get()
 	key, ok = item.(string)
 	assert.True(t, ok)
@@ -327,7 +327,7 @@ func TestSyncSparkApplication_SubmissionFailed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	
+
 	err, shouldDelete = ctrl.syncSparkApplication("default/foo")
 	assert.Equal(t, false, shouldDelete)
 
